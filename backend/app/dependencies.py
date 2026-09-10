@@ -9,7 +9,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.app.core.security import decode_access_token
-from backend.app.db.models import Role, UserAccount, UserRole
+from backend.app.core.errors import AppError
+from backend.app.db.models import Role, UserAccount, UserRole, UserWarehouseScope
 from backend.app.db.session import get_db
 
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -40,6 +41,29 @@ def get_user_roles(db: Session, user_id: int) -> list[str]:
         .order_by(Role.role_code)
     )
     return list(db.scalars(statement))
+
+
+def get_current_user_roles(db: Session, user_id: int) -> set[str]:
+    return set(get_user_roles(db, user_id))
+
+
+def ensure_warehouse_scope(
+    db: Session,
+    user_id: int,
+    roles: set[str],
+    warehouse_ids: set[int],
+) -> None:
+    if "admin" in roles:
+        return
+    granted = set(
+        db.scalars(
+            select(UserWarehouseScope.warehouse_id).where(
+                UserWarehouseScope.user_id == user_id
+            )
+        )
+    )
+    if not warehouse_ids.issubset(granted):
+        raise AppError("WAREHOUSE_SCOPE_FORBIDDEN", "没有目标仓库的操作权限", 403)
 
 
 def require_roles(*allowed_roles: str):

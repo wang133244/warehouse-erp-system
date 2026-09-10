@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import select
@@ -8,6 +9,13 @@ from sqlalchemy.orm import Session
 
 from backend.app.core.errors import AppError
 from backend.app.db.models import AuditLog, IdempotencyRecord, StockBalance, StockLedger
+
+
+@dataclass(frozen=True)
+class ServiceResult:
+    body: dict[str, Any]
+    status_code: int
+    replayed: bool = False
 
 
 def require_idempotency_key(key: str | None) -> str:
@@ -21,8 +29,38 @@ def existing_idempotent_response(db: Session, user_id: int, key: str) -> dict[st
     return row.response_body if row is not None and row.response_body is not None else None
 
 
-def record_idempotent_response(db: Session, *, user_id: int, key: str, path: str, body: dict[str, Any], status: int = 200) -> None:
-    db.add(IdempotencyRecord(user_id=user_id, idempotency_key=key, request_method="POST", request_path=path, response_status=status, response_body=body))
+def replay_result(db: Session, user_id: int, key: str) -> ServiceResult | None:
+    row = db.scalar(
+        select(IdempotencyRecord).where(
+            IdempotencyRecord.user_id == user_id,
+            IdempotencyRecord.idempotency_key == key,
+        )
+    )
+    if row is None or row.response_body is None:
+        return None
+    return ServiceResult(row.response_body, row.response_status or 200, True)
+
+
+def record_idempotent_response(
+    db: Session,
+    *,
+    user_id: int,
+    key: str,
+    method: str = "POST",
+    path: str,
+    body: dict[str, Any],
+    status: int = 200,
+) -> None:
+    db.add(
+        IdempotencyRecord(
+            user_id=user_id,
+            idempotency_key=key,
+            request_method=method,
+            request_path=path,
+            response_status=status,
+            response_body=body,
+        )
+    )
 
 
 def write_audit(db: Session, *, user_id: int, action: str, entity_type: str, entity_id: int | str, before: dict | None = None, after: dict | None = None, quantity_before: int | None = None, quantity_after: int | None = None) -> None:
@@ -71,3 +109,132 @@ def deduct_reserved(db: Session, *, product_id: int, location_id: int, quantity:
     balance.quantity -= quantity; balance.reserved_quantity -= quantity
     db.add(StockLedger(product_id=product_id, location_id=location_id, transaction_type="outbound", quantity_delta=-quantity, before_quantity=before, after_quantity=balance.quantity, source_type="outbound_order", source_id=source_id, idempotency_key=f"{key}:{product_id}:{location_id}", operator_id=None))
     write_audit(db, user_id=user_id, action="outbound_complete", entity_type="stock_balance", entity_id=balance.balance_id, quantity_before=before, quantity_after=balance.quantity)
+
+
+def apply_count_adjustment(
+    db: Session,
+    *,
+    product_id: int,
+    location_id: int,
+    target_quantity: int,
+    source_id: int,
+    item_id: int,
+    key: str,
+    user_id: int,
+) -> None:
+    balance = _locked_balance(db, product_id, location_id, create=True)
+    before = balance.quantity
+    delta = target_quantity - before
+    if delta == 0:
+        return
+    balance.quantity = target_quantity
+    db.add(
+        StockLedger(
+            product_id=product_id,
+            location_id=location_id,
+            transaction_type="count_gain" if delta > 0 else "count_loss",
+            quantity_delta=delta,
+            before_quantity=before,
+            after_quantity=target_quantity,
+            source_type="stock_count_order",
+            source_id=source_id,
+            idempotency_key=f"{key}:stock-count-item-{item_id}:apply",
+            operator_id=user_id,
+        )
+    )
+    write_audit(
+        db,
+        user_id=user_id,
+        action="stock_count_apply",
+        entity_type="stock_balance",
+        entity_id=balance.balance_id,
+        quantity_before=before,
+        quantity_after=target_quantity,
+    )
+
+
+def execute_transfer_line(
+    db: Session,
+    *,
+    product_id: int,
+    source_location_id: int,
+    target_location_id: int,
+    quantity: int,
+    source_id: int,
+    item_id: int,
+    key: str,
+    user_id: int,
+) -> None:
+    first_location_id, second_location_id = sorted((source_location_id, target_location_id))
+    first_balance = _locked_balance(db, product_id, first_location_id, create=True)
+    second_balance = _locked_balance(db, product_id, second_location_id, create=True)
+    source, target = (
+        (first_balance, second_balance)
+        if source_location_id < target_location_id
+        else (second_balance, first_balance)
+    )
+
+    available_quantity = source.quantity - source.reserved_quantity
+    if available_quantity < quantity:
+        raise AppError(
+            "INVENTORY_INSUFFICIENT",
+            "可用库存不足",
+            409,
+            {
+                "product_id": product_id,
+                "location_id": source_location_id,
+                "required": quantity,
+                "available": available_quantity,
+            },
+        )
+
+    source_before = source.quantity
+    target_before = target.quantity
+    source.quantity -= quantity
+    target.quantity += quantity
+    db.add(
+        StockLedger(
+            product_id=product_id,
+            location_id=source_location_id,
+            transaction_type="transfer_out",
+            quantity_delta=-quantity,
+            before_quantity=source_before,
+            after_quantity=source.quantity,
+            source_type="transfer_order",
+            source_id=source_id,
+            idempotency_key=f"{key}:transfer-item-{item_id}:out",
+            operator_id=user_id,
+        )
+    )
+    db.add(
+        StockLedger(
+            product_id=product_id,
+            location_id=target_location_id,
+            transaction_type="transfer_in",
+            quantity_delta=quantity,
+            before_quantity=target_before,
+            after_quantity=target.quantity,
+            source_type="transfer_order",
+            source_id=source_id,
+            idempotency_key=f"{key}:transfer-item-{item_id}:in",
+            operator_id=user_id,
+        )
+    )
+    write_audit(
+        db,
+        user_id=user_id,
+        action="transfer_out",
+        entity_type="stock_balance",
+        entity_id=source.balance_id,
+        quantity_before=source_before,
+        quantity_after=source.quantity,
+    )
+    write_audit(
+        db,
+        user_id=user_id,
+        action="transfer_in",
+        entity_type="stock_balance",
+        entity_id=target.balance_id,
+        quantity_before=target_before,
+        quantity_after=target.quantity,
+    )
