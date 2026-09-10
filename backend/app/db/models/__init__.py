@@ -14,11 +14,16 @@ from backend.app.db.models.inventory import (
     StockLedger,
 )
 from backend.app.db.models.operations import (
+    ApprovalTask,
     InboundItem,
     InboundOrder,
     OutboundItem,
     OutboundOrder,
     PickingTask,
+    StockCountItem,
+    StockCountOrder,
+    TransferItem,
+    TransferOrder,
 )
 from backend.app.db.models.security import (
     Role,
@@ -28,6 +33,7 @@ from backend.app.db.models.security import (
 )
 
 __all__ = [
+    "ApprovalTask",
     "AuditLog",
     "Customer",
     "DataImportBatch",
@@ -43,7 +49,11 @@ __all__ = [
     "Role",
     "Staff",
     "StockBalance",
+    "StockCountItem",
+    "StockCountOrder",
     "StockLedger",
+    "TransferItem",
+    "TransferOrder",
     "UserAccount",
     "UserRole",
     "UserWarehouseScope",
