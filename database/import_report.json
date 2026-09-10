@@ -1,0 +1,18 @@
+{
+  "warehouse": 1,
+  "warehouse_location": 65856,
+  "product": 3128,
+  "staff": 10,
+  "customer": 100,
+  "stock_balance": 57623,
+  "inbound_record": 56211,
+  "outbound_record": 45082,
+  "total_rows": 228010,
+  "validation": {
+    "product_unique_key": "source_product_code + brand",
+    "product_master_quantity_meaning": "pallet_capacity",
+    "stock_quantity_meaning": "actual unit quantity",
+    "transaction_quantity_meaning": "actual unit quantity",
+    "historical_transactions_write_stock_ledger": false
+  }
+}

@@ -1,0 +1,12 @@
+fastapi<1,>=0.141
+uvicorn[standard]<1,>=0.52
+sqlalchemy<3,>=2.0
+alembic<2,>=1.19
+pymysql<2,>=1.2
+pydantic-settings<3,>=2.15
+PyJWT<3,>=2.13
+
+[test]
+httpx<1,>=0.28
+pytest<10,>=9
+pytest-asyncio<2,>=1.4

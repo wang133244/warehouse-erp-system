@@ -1,0 +1,41 @@
+# Python caches and virtual environments
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+backend/.venv/
+
+# Node dependencies and build output
+frontend/node_modules/
+frontend/dist/
+**/coverage/
+*.tsbuildinfo
+
+# Local secrets and credentials
+backend/.env
+backend/.env.local
+backend/.env.production
+backend/.admin-password
+frontend/.env
+frontend/.env.local
+frontend/.env.production
+*.pem
+*.key
+*.p12
+*.pfx
+*.secret
+
+# Local operational artifacts
+backups/
+logs/
+*.log
+
+# Machine-specific destructive/local setup scripts
+tools/reset_mysql_root_password.ps1
+tools/reset_mysql_root_password_init_file.ps1
+tools/reset_sqlyog.ps1
+tools/configure_mysql_cli.ps1
+tools/set_mysql_port_3306.ps1
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
