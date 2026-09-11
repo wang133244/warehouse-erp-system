@@ -63,8 +63,32 @@ def record_idempotent_response(
     )
 
 
-def write_audit(db: Session, *, user_id: int, action: str, entity_type: str, entity_id: int | str, before: dict | None = None, after: dict | None = None, quantity_before: int | None = None, quantity_after: int | None = None) -> None:
-    db.add(AuditLog(request_id="api", user_id=user_id, action=action, entity_type=entity_type, entity_id=str(entity_id), before_state=before, after_state=after, quantity_before=quantity_before, quantity_after=quantity_after))
+def write_audit(
+    db: Session,
+    *,
+    user_id: int,
+    action: str,
+    entity_type: str,
+    entity_id: int | str,
+    before: dict | None = None,
+    after: dict | None = None,
+    quantity_before: int | None = None,
+    quantity_after: int | None = None,
+    request_id: str = "api",
+) -> None:
+    db.add(
+        AuditLog(
+            request_id=request_id,
+            user_id=user_id,
+            action=action,
+            entity_type=entity_type,
+            entity_id=str(entity_id),
+            before_state=before,
+            after_state=after,
+            quantity_before=quantity_before,
+            quantity_after=quantity_after,
+        )
+    )
 
 
 def _locked_balance(db: Session, product_id: int, location_id: int, *, create: bool = False) -> StockBalance:
@@ -121,6 +145,7 @@ def apply_count_adjustment(
     item_id: int,
     key: str,
     user_id: int,
+    request_id: str = "api",
 ) -> None:
     balance = _locked_balance(db, product_id, location_id, create=True)
     before = balance.quantity
@@ -150,6 +175,7 @@ def apply_count_adjustment(
         entity_id=balance.balance_id,
         quantity_before=before,
         quantity_after=target_quantity,
+        request_id=request_id,
     )
 
 

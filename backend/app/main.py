@@ -3,7 +3,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from backend.app.api.v1 import alerts, audit_logs, auth, catalog, inbounds, inventory, outbounds, picking_tasks
+from backend.app.api.v1 import (
+    alerts,
+    audit_logs,
+    auth,
+    catalog,
+    inbounds,
+    inventory,
+    outbounds,
+    picking_tasks,
+    stock_counts,
+)
 from backend.app.core.config import get_settings
 from backend.app.core.middleware import install_exception_handlers, install_middleware
 from backend.app.db.models import InboundOrder, OutboundOrder, StockBalance
@@ -16,7 +26,17 @@ def create_app() -> FastAPI:
     application.add_middleware(CORSMiddleware, allow_origins=settings.cors_origin_list, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
     install_middleware(application)
     install_exception_handlers(application)
-    for router in (auth.router, catalog.router, inventory.router, inbounds.router, outbounds.router, picking_tasks.router, audit_logs.router, alerts.router):
+    for router in (
+        auth.router,
+        catalog.router,
+        inventory.router,
+        inbounds.router,
+        outbounds.router,
+        picking_tasks.router,
+        stock_counts.router,
+        audit_logs.router,
+        alerts.router,
+    ):
         application.include_router(router, prefix="/api/v1")
 
     @application.get("/health", tags=["system"])

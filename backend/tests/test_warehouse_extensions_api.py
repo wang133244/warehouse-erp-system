@@ -11,11 +11,14 @@ from backend.app.core.errors import AppError
 from backend.app.core.security import hash_password
 from backend.app.db.base import Base
 from backend.app.db.models import (
+    ApprovalTask,
     AuditLog,
     IdempotencyRecord,
     Product,
     Role,
     StockBalance,
+    StockCountItem,
+    StockCountOrder,
     StockLedger,
     TransferItem,
     TransferOrder,
@@ -302,7 +305,110 @@ def _audits(environment: WarehouseEnvironment) -> list[tuple[int, ...]]:
         )
 
 
-@pytest.mark.xfail(reason="stock-count routes are implemented in a later task", strict=False)
+def _count_headers(
+    environment: WarehouseEnvironment,
+    username: str = "warehouse_operator",
+    key: str | None = None,
+) -> dict[str, str]:
+    return _headers(environment, username, key)
+
+
+def _create_stock_count(
+    environment: WarehouseEnvironment,
+    *,
+    counted_quantity: int,
+    location_id: int = 1,
+    note: str | None = None,
+    key: str = "count-create",
+) -> dict:
+    response = environment.client.post(
+        "/api/v1/stock-counts",
+        headers=_count_headers(environment, key=key),
+        json={
+            "note": note,
+            "items": [
+                {
+                    "product_id": environment.product_id,
+                    "location_id": location_id,
+                    "counted_quantity": counted_quantity,
+                }
+            ],
+        },
+    )
+    assert response.status_code == 201
+    return response.json()
+
+
+def _submit_stock_count(
+    environment: WarehouseEnvironment,
+    count_id: int,
+    *,
+    key: str = "count-submit",
+) -> dict:
+    response = environment.client.post(
+        f"/api/v1/stock-counts/{count_id}/submit",
+        headers=_count_headers(environment, key=key),
+    )
+    assert response.status_code == 200
+    return response.json()
+
+
+def _stock_count_detail(environment: WarehouseEnvironment, count_id: int) -> dict:
+    response = environment.client.get(
+        f"/api/v1/stock-counts/{count_id}",
+        headers=_count_headers(environment),
+    )
+    assert response.status_code == 200
+    return response.json()
+
+
+def _count_approval_tasks(environment: WarehouseEnvironment, count_id: int) -> list[ApprovalTask]:
+    with environment.session_factory() as db:
+        return list(
+            db.scalars(
+                select(ApprovalTask).where(
+                    ApprovalTask.business_type == "stock_count",
+                    ApprovalTask.business_id == count_id,
+                )
+            )
+        )
+
+
+def _count_ledgers(environment: WarehouseEnvironment, count_id: int) -> list[StockLedger]:
+    with environment.session_factory() as db:
+        return list(
+            db.scalars(
+                select(StockLedger).where(
+                    StockLedger.source_type == "stock_count_order",
+                    StockLedger.source_id == count_id,
+                )
+            )
+        )
+
+
+def _stock_quantity(environment: WarehouseEnvironment, location_id: int = 1) -> int:
+    with environment.session_factory() as db:
+        balance = db.scalar(
+            select(StockBalance).where(
+                StockBalance.product_id == environment.product_id,
+                StockBalance.location_id == location_id,
+            )
+        )
+        assert balance is not None
+        return balance.quantity
+
+
+def _count_items(environment: WarehouseEnvironment, count_id: int) -> list[StockCountItem]:
+    with environment.session_factory() as db:
+        return list(
+            db.scalars(
+                select(StockCountItem).where(
+                    StockCountItem.stock_count_order_id == count_id
+                )
+            )
+        )
+
+
 def test_replayed_create_returns_original_created_status(
     warehouse_environment: WarehouseEnvironment,
 ) -> None:
@@ -321,7 +427,6 @@ def test_replayed_create_returns_original_created_status(
     assert first.json() == replay.json()
 
 
-@pytest.mark.xfail(reason="stock-count routes are implemented in a later task", strict=False)
 def test_warehouse_scope_rejects_operator_outside_scope(
     warehouse_environment: WarehouseEnvironment,
 ) -> None:
@@ -331,6 +436,270 @@ def test_warehouse_scope_rejects_operator_outside_scope(
         json={"items": [{"product_id": 1, "location_id": 3, "counted_quantity": 4}]},
     )
     assert response.status_code == 403
+
+
+def test_zero_variance_count_completes_without_ledger_or_approval(
+    warehouse_environment: WarehouseEnvironment,
+) -> None:
+    created = _create_stock_count(
+        warehouse_environment,
+        counted_quantity=10,
+        key="zero-variance-create",
+    )
+    count_id = created["stock_count_order_id"]
+    submitted = _submit_stock_count(
+        warehouse_environment,
+        count_id,
+        key="zero-variance-submit",
+    )
+
+    assert submitted["status"] == "completed"
+    assert _count_approval_tasks(warehouse_environment, count_id) == []
+    assert _count_ledgers(warehouse_environment, count_id) == []
+    assert _stock_quantity(warehouse_environment) == 10
+
+    detail = _stock_count_detail(warehouse_environment, count_id)
+    assert detail["items"][0]["book_quantity"] == 10
+    assert detail["items"][0]["counted_quantity"] == 10
+    assert detail["items"][0]["variance_quantity"] == 0
+
+
+def test_count_variance_waits_for_approval_without_inventory_mutation(
+    warehouse_environment: WarehouseEnvironment,
+) -> None:
+    created = _create_stock_count(
+        warehouse_environment,
+        counted_quantity=7,
+        key="variance-create",
+    )
+    count_id = created["stock_count_order_id"]
+    submitted = _submit_stock_count(
+        warehouse_environment,
+        count_id,
+        key="variance-submit",
+    )
+
+    assert submitted["status"] == "pending_approval"
+    assert _stock_quantity(warehouse_environment) == 10
+    tasks = _count_approval_tasks(warehouse_environment, count_id)
+    assert len(tasks) == 1
+    assert tasks[0].status == "pending"
+    assert tasks[0].requested_by == warehouse_environment.operator_user_id
+    assert _count_ledgers(warehouse_environment, count_id) == []
+
+    detail = _stock_count_detail(warehouse_environment, count_id)
+    assert detail["items"][0]["book_quantity"] == 10
+    assert detail["items"][0]["counted_quantity"] == 7
+    assert detail["items"][0]["variance_quantity"] == -3
+    assert detail["approval_summary"]["status"] == "pending"
+
+
+def test_count_rejects_negative_and_duplicate_lines(
+    warehouse_environment: WarehouseEnvironment,
+) -> None:
+    negative = warehouse_environment.client.post(
+        "/api/v1/stock-counts",
+        headers=_count_headers(warehouse_environment, key="negative-count"),
+        json={
+            "items": [
+                {
+                    "product_id": warehouse_environment.product_id,
+                    "location_id": 1,
+                    "counted_quantity": -1,
+                }
+            ]
+        },
+    )
+    duplicate = warehouse_environment.client.post(
+        "/api/v1/stock-counts",
+        headers=_count_headers(warehouse_environment, key="duplicate-count"),
+        json={
+            "items": [
+                {
+                    "product_id": warehouse_environment.product_id,
+                    "location_id": 1,
+                    "counted_quantity": 1,
+                },
+                {
+                    "product_id": warehouse_environment.product_id,
+                    "location_id": 1,
+                    "counted_quantity": 2,
+                },
+            ]
+        },
+    )
+
+    assert negative.status_code == 422
+    assert duplicate.status_code == 422
+
+
+def test_count_update_replaces_items_and_uses_server_book_quantity(
+    warehouse_environment: WarehouseEnvironment,
+) -> None:
+    created = warehouse_environment.client.post(
+        "/api/v1/stock-counts",
+        headers=_count_headers(warehouse_environment, key="update-create"),
+        json={"items": []},
+    )
+    assert created.status_code == 201
+    count_id = created.json()["stock_count_order_id"]
+
+    updated = warehouse_environment.client.put(
+        f"/api/v1/stock-counts/{count_id}",
+        headers=_count_headers(warehouse_environment, key="update-items"),
+        json={
+            "note": "cycle count",
+            "items": [
+                {
+                    "product_id": warehouse_environment.product_id,
+                    "location_id": 1,
+                    "counted_quantity": 10,
+                }
+            ],
+        },
+    )
+    assert updated.status_code == 200
+    assert updated.json()["status"] == "counting"
+
+    submitted = _submit_stock_count(
+        warehouse_environment,
+        count_id,
+        key="update-submit",
+    )
+    assert submitted["status"] == "completed"
+    items = _count_items(warehouse_environment, count_id)
+    assert len(items) == 1
+    assert items[0].book_quantity == 10
+    assert items[0].counted_quantity == 10
+    assert items[0].variance_quantity == 0
+
+    late_update = warehouse_environment.client.put(
+        f"/api/v1/stock-counts/{count_id}",
+        headers=_count_headers(warehouse_environment, key="late-update"),
+        json={"items": []},
+    )
+    assert late_update.status_code == 409
+
+
+def test_stock_count_list_filters_status_and_paginates(
+    warehouse_environment: WarehouseEnvironment,
+) -> None:
+    completed = _create_stock_count(
+        warehouse_environment,
+        counted_quantity=10,
+        key="list-completed-create",
+    )
+    _submit_stock_count(
+        warehouse_environment,
+        completed["stock_count_order_id"],
+        key="list-completed-submit",
+    )
+    draft = warehouse_environment.client.post(
+        "/api/v1/stock-counts",
+        headers=_count_headers(warehouse_environment, key="list-draft-create"),
+        json={"items": []},
+    )
+    assert draft.status_code == 201
+
+    response = warehouse_environment.client.get(
+        "/api/v1/stock-counts",
+        headers=_count_headers(warehouse_environment),
+        params={"status": "completed", "page": 1, "page_size": 10},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] >= 1
+    assert body["page"] == 1
+    assert body["page_size"] == 10
+    assert all(item["status"] == "completed" for item in body["items"])
+
+
+def test_stock_count_service_approval_applies_loss_and_rejection_keeps_inventory(
+    warehouse_environment: WarehouseEnvironment,
+) -> None:
+    from backend.app.services.stock_count_service import (
+        approve_stock_count,
+        reject_stock_count,
+    )
+
+    approved_count = _create_stock_count(
+        warehouse_environment,
+        counted_quantity=7,
+        key="approve-service-create",
+    )
+    approved_count_id = approved_count["stock_count_order_id"]
+    _submit_stock_count(
+        warehouse_environment,
+        approved_count_id,
+        key="approve-service-submit",
+    )
+    approved_result = approve_stock_count(
+        warehouse_environment.session_factory(),
+        count_id=approved_count_id,
+        user_id=warehouse_environment.admin_user_id,
+        key="approve-service-key",
+        request_id="test-request",
+    )
+    assert approved_result.status_code == 200
+    assert approved_result.body["status"] == "applied"
+    assert _stock_quantity(warehouse_environment) == 7
+    ledgers = _count_ledgers(warehouse_environment, approved_count_id)
+    assert len(ledgers) == 1
+    assert ledgers[0].transaction_type == "count_loss"
+    assert ledgers[0].quantity_delta == -3
+
+    rejected_count = _create_stock_count(
+        warehouse_environment,
+        counted_quantity=6,
+        key="reject-service-create",
+    )
+    rejected_count_id = rejected_count["stock_count_order_id"]
+    _submit_stock_count(
+        warehouse_environment,
+        rejected_count_id,
+        key="reject-service-submit",
+    )
+    rejected_result = reject_stock_count(
+        warehouse_environment.session_factory(),
+        count_id=rejected_count_id,
+        user_id=warehouse_environment.admin_user_id,
+        key="reject-service-key",
+        comment="资料不完整",
+        request_id="test-request",
+    )
+    assert rejected_result.status_code == 200
+    assert rejected_result.body["status"] == "rejected"
+    assert _stock_quantity(warehouse_environment) == 7
+    assert _count_ledgers(warehouse_environment, rejected_count_id) == []
+
+
+def test_apply_count_adjustment_zero_delta_writes_no_ledger(
+    warehouse_environment: WarehouseEnvironment,
+) -> None:
+    from backend.app.services.inventory_service import apply_count_adjustment
+
+    with warehouse_environment.session_factory() as db:
+        before_quantity = _stock_quantity(warehouse_environment)
+        apply_count_adjustment(
+            db,
+            product_id=warehouse_environment.product_id,
+            location_id=1,
+            target_quantity=before_quantity,
+            source_id=999,
+            item_id=999,
+            key="zero-delta-key",
+            user_id=warehouse_environment.admin_user_id,
+        )
+        db.commit()
+
+    assert _stock_quantity(warehouse_environment) == before_quantity
+    with warehouse_environment.session_factory() as db:
+        ledger = db.scalar(
+            select(StockLedger).where(
+                StockLedger.idempotency_key == "zero-delta-key:stock-count-item-999:apply"
+            )
+        )
+        assert ledger is None
 
 
 @pytest.mark.xfail(reason="transfer routes are implemented in a later task", strict=False)

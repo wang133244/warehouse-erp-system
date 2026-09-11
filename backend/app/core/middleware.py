@@ -1,5 +1,5 @@
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -30,6 +30,10 @@ def _error_response(
     )
     response.headers[REQUEST_ID_HEADER] = _request_id(request)
     return response
+
+
+def _validation_errors(errors: Sequence[Any]) -> list[dict[str, Any]]:
+    return [{key: value for key, value in error.items() if key != "ctx"} for error in errors]
 
 
 def install_middleware(application: FastAPI) -> None:
@@ -75,5 +79,5 @@ def install_exception_handlers(application: FastAPI) -> None:
             status_code=422,
             code="VALIDATION_ERROR",
             message="请求参数校验失败",
-            details={"errors": exc.errors()},
+            details={"errors": _validation_errors(exc.errors())},
         )
