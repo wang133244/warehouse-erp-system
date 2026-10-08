@@ -11,7 +11,7 @@ $py = "C:\Users\wang2\.cache\codex-runtimes\codex-primary-runtime\dependencies\p
 & $py -m backend.scripts.check_database --database-url "mysql+pymysql://erp_app:<password>@127.0.0.1:3306/erp_wms?charset=utf8mb4" --json
 ```
 
-只有获得数据库管理员确认后，才可显式带 `--allow-erp-wms` 运行迁移；详见 `docs/后端开发文档.md`。
+只有获得数据库管理员确认后，才可显式带 `--allow-erp-wms` 运行迁移；详见 [`docs/开发文档.md`](../docs/开发文档.md)。
 
 ## 文件说明
 

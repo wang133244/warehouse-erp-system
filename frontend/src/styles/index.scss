@@ -1,6 +1,13 @@
-@use './variables.scss';
+// 全局样式与助手气泡等覆盖。
+// 引入主题变量，使后续规则可使用 CSS 自定义属性。
+@use './variables.scss'; /* @use './variables.sc */
+// 所有元素使用 border-box，避免内边距撑破布局。
 * { box-sizing: border-box; }
-body { margin: 0; color: var(--ink); background: var(--canvas); font-family: "Microsoft YaHei", "PingFang SC", Arial, sans-serif; }
-button, input, textarea { font-family: inherit; }
-.el-button--primary { --el-button-bg-color: var(--brand); --el-button-border-color: var(--brand); }
-.el-card { border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 6px 22px rgba(30, 60, 110, .04); }
+// 去掉默认边距，设置正文色、画布底色与中文字体栈。
+body { margin: 0; color: var(--ink); background: var(--canvas); font-family: "Microsoft YaHei", "PingFang SC", Arial, sans-serif; } /* body { margin: 0; co */
+// 表单控件继承页面字体，避免系统默认字体跳变。
+button, input, textarea { font-family: inherit; } /* button, input, texta */
+// 主按钮使用品牌色背景与边框。
+.el-button--primary { --el-button-bg-color: var(--brand); --el-button-border-color: var(--brand); } /* .el-button--primary  */
+// 卡片统一细边框、圆角与轻阴影。
+.el-card { border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 6px 22px rgba(30, 60, 110, .04); } /* .el-card { border: 1 */

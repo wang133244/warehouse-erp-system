@@ -1,0 +1,12 @@
+.git
+.cursor
+**/__pycache__
+**/.pytest_cache
+**/.venv
+**/node_modules
+frontend/dist
+frontend/coverage
+backend/.env
+backend/.admin-password
+**/*.pyc
+agent-transcripts

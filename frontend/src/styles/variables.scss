@@ -1,5 +1,10 @@
-:root {
-  --brand: #246bfe; --brand-deep: #173f91; --ink: #172033; --muted: #77839a;
-  --line: #e9edf4; --surface: #ffffff; --canvas: #f5f7fb;
-  --success: #16a875; --warning: #ee9b22; --danger: #e25555;
-}
+// 颜色、间距等全局变量。
+// 在 :root 上声明可被全站 CSS 引用的主题色与中性色。
+:root { /* :root { */
+  // 品牌蓝、加深品牌色、正文色、次要文字色。
+  --brand: #246bfe; --brand-deep: #173f91; --ink: #172033; --muted: #77839a; /* --brand: #246bfe; -- */
+  // 分割线、卡片表面、页面画布底色。
+  --line: #e9edf4; --surface: #ffffff; --canvas: #f5f7fb; /* --line: #e9edf4; --s */
+  // 成功、警告、危险状态色。
+  --success: #16a875; --warning: #ee9b22; --danger: #e25555; /* --success: #16a875;  */
+} /* 结束样式块 */
